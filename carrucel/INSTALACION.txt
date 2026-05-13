@@ -1,0 +1,194 @@
+============================================================
+  GUÍA DE INSTALACIÓN — Paso a paso en el servidor Debian
+  Proyecto: Carrusel de Imágenes
+  Servidor: djardon@tesvg.com.mx
+  Ruta del proyecto: /var/www/html/djardon/
+============================================================
+
+Conéctate primero al servidor:
+  ssh djardon@tesvg.com.mx
+
+
+════════════════════════════════════════════════════════════
+  PASO 1 — Instalar MariaDB (si no está instalado)
+════════════════════════════════════════════════════════════
+
+sudo apt update
+sudo apt install mariadb-server -y
+sudo systemctl start mariadb
+sudo systemctl enable mariadb
+
+
+════════════════════════════════════════════════════════════
+  PASO 2 — Crear la base de datos y usuario en MariaDB
+════════════════════════════════════════════════════════════
+
+Entrar como root:
+  sudo mysql -u root
+
+Dentro del prompt de MariaDB, pega estos comandos:
+
+-- Crear la base de datos
+CREATE DATABASE IF NOT EXISTS carrusel_db
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+
+-- Crear el usuario
+CREATE USER IF NOT EXISTS 'carrusel_user'@'127.0.0.1'
+  IDENTIFIED BY 'Carrusel2024!';
+
+-- Darle permisos solo a esa BD
+GRANT ALL PRIVILEGES ON carrusel_db.* TO 'carrusel_user'@'127.0.0.1';
+FLUSH PRIVILEGES;
+
+-- Usar la base de datos
+USE carrusel_db;
+
+-- Tabla de usuarios
+CREATE TABLE IF NOT EXISTS usuarios (
+  id       INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(60)  NOT NULL UNIQUE,
+  password VARCHAR(255) NOT NULL,
+  created  DATETIME     DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Tabla de imágenes
+CREATE TABLE IF NOT EXISTS imagenes (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  nombre     VARCHAR(120) NOT NULL,
+  ruta       VARCHAR(300) NOT NULL,
+  usuario_id INT          DEFAULT NULL,
+  subida     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Usuario administrador de prueba
+-- (contraseña: Admin1234)
+-- Genera el hash en PHP con: echo password_hash('Admin1234', PASSWORD_BCRYPT);
+-- Reemplaza el hash de abajo por el que te dé PHP, o crea la cuenta desde el registro
+
+INSERT IGNORE INTO usuarios (username, password)
+VALUES ('admin', '$2y$10$ExampleHashHere.ReplaceThis');
+
+-- Ver que todo quedó bien
+SHOW TABLES;
+SELECT id, username FROM usuarios;
+
+-- Salir
+EXIT;
+
+
+════════════════════════════════════════════════════════════
+  PASO 3 — Instalar PostgreSQL (si no está instalado)
+════════════════════════════════════════════════════════════
+
+sudo apt install postgresql postgresql-contrib -y
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+
+
+════════════════════════════════════════════════════════════
+  PASO 4 — Crear la base de datos y usuario en PostgreSQL
+════════════════════════════════════════════════════════════
+
+Entrar como el superusuario postgres:
+  sudo -u postgres psql
+
+Dentro del prompt de PostgreSQL, pega estos comandos:
+
+-- Crear usuario
+CREATE USER carrusel_pg WITH PASSWORD 'CarruselPG2024!';
+
+-- Crear base de datos
+CREATE DATABASE carrusel_log OWNER carrusel_pg;
+
+-- Dar privilegios
+GRANT ALL PRIVILEGES ON DATABASE carrusel_log TO carrusel_pg;
+
+-- Salir del superusuario
+\q
+
+Ahora conectarse como el nuevo usuario a su BD:
+  psql -U carrusel_pg -d carrusel_log -h 127.0.0.1
+
+Dentro de ese prompt crear la tabla de bitácora:
+
+CREATE TABLE IF NOT EXISTS bitacora (
+  id         SERIAL PRIMARY KEY,
+  usuario_id INTEGER,
+  accion     VARCHAR(60)  NOT NULL,
+  detalle    TEXT,
+  fecha      TIMESTAMP    DEFAULT NOW()
+);
+
+CREATE INDEX idx_bitacora_usuario ON bitacora(usuario_id);
+CREATE INDEX idx_bitacora_fecha   ON bitacora(fecha DESC);
+
+-- Verificar
+\dt
+
+-- Salir
+\q
+
+
+════════════════════════════════════════════════════════════
+  PASO 5 — Instalar la extensión PHP para PostgreSQL
+════════════════════════════════════════════════════════════
+
+sudo apt install php-pgsql -y
+sudo systemctl restart apache2
+
+
+════════════════════════════════════════════════════════════
+  PASO 6 — Copiar los archivos del proyecto al servidor
+════════════════════════════════════════════════════════════
+
+Desde tu máquina local (no desde el servidor):
+
+  scp -r ./djardon/* djardon@tesvg.com.mx:/var/www/html/djardon/
+
+O si ya estás en el servidor, los archivos ya están en /var/www/html/djardon/
+
+
+════════════════════════════════════════════════════════════
+  PASO 7 — Crear carpeta de imágenes y dar permisos
+════════════════════════════════════════════════════════════
+
+En el servidor:
+  mkdir -p /var/www/html/djardon/img_carrusel
+  chmod 755 /var/www/html/djardon/img_carrusel
+  chown www-data:www-data /var/www/html/djardon/img_carrusel
+
+
+════════════════════════════════════════════════════════════
+  PASO 8 — Verificar que todo funciona
+════════════════════════════════════════════════════════════
+
+1. Abre en el navegador:  http://tesvg.com.mx/djardon/
+2. Verás la pantalla de Login / Registro
+3. Crea tu cuenta con el formulario de "Crear cuenta"
+4. Entra con esa cuenta
+5. Sube imágenes y navega con los botones ← →
+6. En el inspector (F12 > Elements) verás cómo cambia el src del <img>
+
+
+════════════════════════════════════════════════════════════
+  NOTAS IMPORTANTES
+════════════════════════════════════════════════════════════
+
+• MariaDB  → guarda usuarios e imágenes (datos principales)
+• PostgreSQL → guarda la bitácora/log de cada acción
+  (login, logout, imagen vista, imagen subida, imagen borrada)
+
+• Si PostgreSQL no está disponible, la app sigue funcionando
+  (solo sin bitácora). El carrusel NO depende de Postgres.
+
+• Las contraseñas en la tabla usuarios están con bcrypt
+  (password_hash de PHP). Nunca se guardan en texto plano.
+
+• Cambia las contraseñas de BD en:
+    db_mariadb.php  →  $mariadb_pass
+    db_postgres.php →  $pg_pass
+
+• Para crear el hash del admin en PHP:
+    php -r "echo password_hash('TuContraseña', PASSWORD_BCRYPT);"
